@@ -26,33 +26,40 @@ import logging
 
 from cocotb import start_soon
 from cocotb.triggers import RisingEdge, FallingEdge, Timer
-from cocotb.binary import BinaryValue
-from cocotb.types import Logic
+# from cocotb.binary import BinaryValue
+# from cocotb.types import Logic
 from .version import __version__
 
 
 class I2cSlave:
 
-    def __init__(self, sda_i=None, sda_o=None, scl_o=None, addr=0xa5, speed=400e3, *args, **kwargs):
+    def __init__(self, sda_i=None, sda_o=None, scl_o=None, addr=0x45, speed=400e3, *args, **kwargs):
         self.log = logging.getLogger(f"cocotb.{sda_i._path}")
         #self.sda = sda
         #self.scl = scl
+        if addr > 0x7f:
+            self.log.warning(f"I2C can only accept addresses of 7 bits: 0x{addr}")
+            raise Exception(f"I2C can only accept addresses of 7 bits: 0x{addr}")
         self.sda_i = sda_i
         self.sda_o = sda_o
         self.scl_o = scl_o
-        self.addr = addr
+        self.addr = addr & 0x7f
         self.speed = speed
         
         self.start = False
         self.stop = False
         self.bit_pos = 0
         self.address_phase = False
-        self.write_phase = False
         self.read_phase = False
+        self.write_phase = False
+        self.recv_addr = None
+        
+        self.val = 0x81
 
         self.log.info("I2C Slave")
         self.log.info("cocotbext-i2c version %s", __version__)
         self.log.info("Copyright (c) 2020 Alex Forencich")
+        self.log.info("https://github.com/alexforencich/cocotbext-i2c")
         self.log.info("https://github.com/alexforencich/cocotbext-i2c")
 
         super().__init__(*args, **kwargs)
@@ -96,6 +103,9 @@ class I2cSlave:
     
     async def wait_quarter_bit(self):
         await Timer(int(1e9/self.speed/4), units='ns')
+
+    async def wait_clock_dly(self):
+        await Timer(int(1e9/self.speed/4), units='ns')
     
     def _restart(self):
 #         if self._run_cr is not None:
@@ -126,29 +136,23 @@ class I2cSlave:
     async def _falling_scl(self):
         while True:
             await FallingEdge(self.scl_o)
+            await self.wait_clock_dly()
+            self.sda_i.value = 1
+                        
             if self.start or not self.bit_pos == 0:
-                self.bit_pos += 1
+                if self.bit_pos == 9:
+                    self.bit_pos = 1
+                else:
+                    self.bit_pos += 1
                 self.start = False
             
-            if self.bit_pos == 9:
-                await self.wait_quarter_bit()
-                if self.address_phase:
-                    #self.log.info(f"0x{self.addr:02x}")
-                    #self.log.info(f"0x{self.recv_addr:02x}")
-                    if self.addr == self.recv_addr:
-                        self.sda_i.value = 0
-                        #self.sda.value = 0
-                    else:
-                        self.sda_i.value = 1
-                        #self.sda.value = Logic("Z")
-                    self.address_phase = False
-                else:
+            if (self.address_phase and self.active) or self.write_phase:
+                if self.bit_pos == 9:
                     self.sda_i.value = 0
-                    #self.sda.value = 0
-                await FallingEdge(self.scl_o)
-                await self.wait_quarter_bit()
-                self.sda_i.value = 1
-                #self.sda.value = Logic("Z")
+            elif self.read_phase:
+                if not 0 == self.bit_pos and not self.bit_pos >= 9:
+                    #self.sda_i.value = 1
+                    self.sda_i.value = (self.val >> (8-self.bit_pos)) & 0x1
 
     async def _rising_scl(self):
         while True:
@@ -156,17 +160,28 @@ class I2cSlave:
             if not 0 == self.bit_pos and not self.bit_pos >= 9:
                 if 1 == self.bit_pos:
                     self.recv_byte = 0
-                #self.log.info(f"Bit {self.bit_pos} {self.sda_o.value}")
                 self.recv_byte |= (self.sda_o.value << (8-self.bit_pos))
                 
                 if self.bit_pos == 8:
                     if self.address_phase:
-                        self.recv_addr = self.recv_byte
+                        self.read_phase = False
+                        self.write_phase = False
+                        self.recv_addr = self.recv_byte >> 1
                         self.active = (self.recv_addr == self.addr)
-                    self.log.info(f"Received: 0x{self.recv_byte:02x} {self.active}")
+                        if 1 == self.sda_o.value:
+                            self.read_phase = True
+                            access_type = "Read"
+                        else:
+                            self.write_phase = True
+                            access_type = "Write"
+                    if self.address_phase or self.write_phase:
+                        self.log.info(f"Received: 0x{self.recv_byte:02x} {access_type} {self.active}")
             
+            if self.read_phase and not self.address_phase and self.bit_pos == 9:
+                self.log.info(f"Transmit: 0x{self.val:02x} ACK {self.sda_o.value}")
+                self.val += 1
             if self.bit_pos == 9:
-                self.bit_pos = 1
+                self.address_phase = False
 
     
 #     async def _run(self):

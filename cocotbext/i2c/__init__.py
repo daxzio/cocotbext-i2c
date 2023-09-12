@@ -27,3 +27,4 @@ from .version import __version__
 from .i2c_master import I2cMaster
 from .i2c_device import I2cDevice
 from .i2c_memory import I2cMemory
+from .i2c_slave import I2cSlave

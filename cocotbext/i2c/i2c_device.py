@@ -64,13 +64,14 @@ class I2cDevice:
         else:
             self.sda.value = val
             # self.sda <= BinaryValue('z') if val else 0
+            # self.sda.value = BinaryValue('z') if val else 0
 
     def _set_scl(self, val):
         if self.scl_o is not None:
             self.scl_o.value = val
         else:
             self.scl.value = val
-            # self.scl <= BinaryValue('z') if val else 0
+            # self.scl.value = BinaryValue('z') if val else 0
 
     async def _send_bit(self, b):
         if self.scl.value.integer:
